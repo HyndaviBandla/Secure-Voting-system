@@ -1,0 +1,122 @@
+import face_recognition as fr
+import cv2 as cv
+import dlib
+import os
+import pandas as pd
+from google.colab.patches import cv2_imshow
+from scipy.spatial import distance as dist
+
+# Load the CSV file
+df = pd.read_csv("/content/NamesCSV.csv")
+rows, columns = df.shape
+
+# Lists for tracking matches and filenames
+list1 = []
+list2 = []
+list3 = set()
+
+# Load the target image
+target_image = fr.load_image_file("/content/eyeblink.jpg")
+target_encoding = fr.face_encodings(target_image)[0]
+
+# Eye aspect ratio threshold
+EYE_AR_THRESH = 0.2
+
+# Load the face detector and predictor for landmarks
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor("/content/shape_predictor_68_face_landmarks.dat")
+
+# Helper function to calculate eye aspect ratio
+def eye_aspect_ratio(eye):
+    A = dist.euclidean(eye[1], eye[5])
+    B = dist.euclidean(eye[2], eye[4])
+    C = dist.euclidean(eye[0], eye[3])
+    ear = (A + B) / (2.0 * C)
+    return ear
+
+# Function to detect if the person is live
+def is_live_face(image):
+    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    faces = detector(gray, 0)
+    for face in faces:
+        landmarks = predictor(gray, face)
+
+        # Extract coordinates of both eyes
+        left_eye = [(landmarks.part(i).x, landmarks.part(i).y) for i in range(36, 42)]
+        right_eye = [(landmarks.part(i).x, landmarks.part(i).y) for i in range(42, 48)]
+
+        # Calculate the eye aspect ratio (EAR)
+        left_ear = eye_aspect_ratio(left_eye)
+        right_ear = eye_aspect_ratio(right_eye)
+
+        # Average EAR and check if it's below the threshold (indicating a blink)
+        ear = (left_ear + right_ear) / 2.0
+        if ear < EYE_AR_THRESH:
+            print("Blink detected: Live face confirmed")
+            return True
+    print("No blink detected: Possibly a spoof attempt")
+    return False
+
+def encode_faces(folder):
+    list_people_encoding = []
+    for filename in os.listdir(folder):
+        try:
+            known_image = fr.load_image_file(os.path.join(folder, filename))
+            known_encoding = fr.face_encodings(known_image)[0]
+            list_people_encoding.append((known_encoding, filename))
+        except IndexError:
+            print(f"No face detected in {filename}, skipping.")
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
+    return list_people_encoding
+
+def find_target_face():
+    face_locations = fr.face_locations(target_image)
+    for person in encode_faces("/content/drive/MyDrive/capstoneElection"):
+        encoded_face = person[0]
+        filename = person[1]
+        is_target_face = fr.compare_faces([encoded_face], target_encoding, tolerance=0.55)
+        list1.append(is_target_face)
+        list2.append(filename)
+        print(f'{is_target_face}: {filename}')
+
+        # Check if live face detection passed before drawing frame
+        if face_locations and is_target_face[0] and is_live_face(target_image):
+            create_frame(face_locations[0], filename)
+
+def create_frame(location, label):
+    top, right, bottom, left = location
+    cv.rectangle(target_image, (left, top), (right, bottom), (255, 0, 0), 2)
+    cv.rectangle(target_image, (left, bottom + 20), (right, bottom), (255, 0, 0), cv.FILLED)
+    cv.putText(target_image, label, (left + 3, bottom + 14), cv.FONT_HERSHEY_DUPLEX, 0.4, (255, 255, 255), 1)
+
+def attendance():
+    for i in range(len(list1)):
+        if list1[i][0]:
+            list3.add(list2[i])
+
+    list4 = list(list3)
+    list5 = []
+
+    for filename in list4:
+        name = filename.split('_')[0].strip()
+        for j in range(rows):
+            if df.iloc[j, 0] == filename:
+                list5.append(df.iloc[j, 1])
+                break
+
+    # Print recognized names
+    print("Recognized faces and their details:")
+    for i in range(len(list4)):
+        print(f"Filename: {list4[i]}, Name: {list5[i] if i < len(list5) else 'Not found in CSV'}")
+
+def render_image():
+    attendance()
+    rgb_img = cv.cvtColor(target_image, cv.COLOR_BGR2RGB)
+    cv2_imshow(rgb_img)
+
+find_target_face()
+render_image()
+
+cv.waitKey(0)
+cv.destroyAllWindows()
